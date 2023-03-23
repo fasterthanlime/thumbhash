@@ -5,3 +5,14 @@ edition = "2021"
 description = "A very compact representation of an image placeholder"
 license = "MIT"
 repository = "https://github.com/evanw/thumbhash"
+
+# make this both a library and a binary
+[[bin]]
+name = "thumbhash"
+path = "src/main.rs"
+
+[dependencies]
+color-eyre = "0.6.2"
+image = { version = "0.24.5", default-features = false, features = ["jpeg", "png"] }
+
+
