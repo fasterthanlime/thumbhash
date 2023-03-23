@@ -2,6 +2,8 @@
 
 use std::f32::consts::PI;
 
+use bitvec::{macros::internal::funty::Integral, prelude::*, slice::BitSlice};
+
 /// Encodes an RGBA image to a ThumbHash. RGB should not be premultiplied by A.
 ///
 /// * `w`: The width of the input image. Must be ≤100px.
@@ -152,27 +154,17 @@ pub fn rgba_to_thumb_hash(w: usize, h: usize, rgba: &[u8]) -> Vec<u8> {
 /// the rendered placeholder image. An error will be returned if the input is
 /// too short.
 pub fn thumb_hash_to_rgba(hash: &[u8]) -> Result<(usize, usize, Vec<u8>), ()> {
-    use bitvec::prelude::*;
     let mut hash = hash.view_bits::<Lsb0>();
 
-    let l_dc = hash[..6].load_le::<u8>() as f32 / 63.0;
-    hash = &hash[6..];
-    let p_dc = hash[..6].load_le::<u8>() as f32 / 31.5 - 1.0;
-    hash = &hash[6..];
-    let q_dc = hash[..6].load_le::<u8>() as f32 / 31.5 - 1.0;
-    hash = &hash[6..];
-    let l_scale = hash[..5].load_le::<u8>() as f32 / 31.0;
-    hash = &hash[5..];
-    let has_alpha = hash[0];
-    hash = &hash[1..];
+    let l_dc = read_le::<u8>(&mut hash, 6) as f32 / 63.0;
+    let p_dc = read_le::<u8>(&mut hash, 6) as f32 / 31.5 - 1.0;
+    let q_dc = read_le::<u8>(&mut hash, 6) as f32 / 31.5 - 1.0;
+    let l_scale = read_le::<u8>(&mut hash, 5) as f32 / 31.0;
+    let has_alpha = read_le::<u8>(&mut hash, 1) != 0;
 
-    let l_count = hash[..3].load_le::<u8>() as usize;
-    hash = &hash[3..];
-
-    let p_scale = hash[..6].load_le::<u8>() as f32 / 63.0;
-    hash = &hash[6..];
-    let q_scale = hash[..6].load_le::<u8>() as f32 / 63.0;
-    hash = &hash[6..];
+    let l_count = read_le::<u8>(&mut hash, 3) as usize;
+    let p_scale = read_le::<u8>(&mut hash, 6) as f32 / 63.0;
+    let q_scale = read_le::<u8>(&mut hash, 6) as f32 / 63.0;
 
     let l_max = if has_alpha { 5 } else { 7 };
     let is_landscape = hash[0];
@@ -183,13 +175,10 @@ pub fn thumb_hash_to_rgba(hash: &[u8]) -> Result<(usize, usize, Vec<u8>), ()> {
     let ratio = lx as f32 / ly as f32;
 
     let (a_dc, a_scale) = if has_alpha {
-        // let header8 = read_byte(&mut hash)?;
-        // ((header8 & 15) as f32 / 15.0, (header8 >> 4) as f32 / 15.0)
-        let a_dc = hash[..4].load_le::<u8>() as f32 / 15.0;
-        hash = &hash[4..];
-        let a_scale = hash[..4].load_le::<u8>() as f32 / 15.0;
-        hash = &hash[4..];
-        (a_dc, a_scale)
+        (
+            read_le::<u8>(&mut hash, 4) as f32 / 15.0,
+            read_le::<u8>(&mut hash, 4) as f32 / 15.0,
+        )
     } else {
         (1.0, 1.0)
     };
@@ -200,9 +189,7 @@ pub fn thumb_hash_to_rgba(hash: &[u8]) -> Result<(usize, usize, Vec<u8>), ()> {
         for cy in 0..ny {
             let mut cx = if cy > 0 { 0 } else { 1 };
             while cx * ny < nx * (ny - cy) {
-                ac.push((hash[..4].load_le::<u8>() as f32 / 7.5 - 1.0) * scale);
-                hash = &hash[4..];
-
+                ac.push((read_le::<u8>(&mut hash, 4) as f32 / 7.5 - 1.0) * scale);
                 cx += 1;
             }
         }
@@ -294,6 +281,12 @@ pub fn thumb_hash_to_rgba(hash: &[u8]) -> Result<(usize, usize, Vec<u8>), ()> {
         }
     }
     Ok((w, h, rgba))
+}
+
+pub fn read_le<T: Integral>(bs: &mut &BitSlice<u8, Lsb0>, bits: usize) -> T {
+    let v = bs[..bits].load_le::<T>();
+    *bs = &bs[bits..];
+    v
 }
 
 /// Extracts the average color from a ThumbHash.
