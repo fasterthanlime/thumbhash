@@ -12,6 +12,7 @@ name = "thumbhash"
 path = "src/main.rs"
 
 [dependencies]
+bitvec = "1.0.1"
 color-eyre = "0.6.2"
 image = { version = "0.24.5", default-features = false, features = ["jpeg", "png"] }
 

@@ -1,5 +1,6 @@
+#![allow(clippy::result_unit_err, clippy::needless_range_loop)]
+
 use std::f32::consts::PI;
-use std::io::Read;
 
 /// Encodes an RGBA image to a ThumbHash. RGB should not be premultiplied by A.
 ///
@@ -145,59 +146,63 @@ pub fn rgba_to_thumb_hash(w: usize, h: usize, rgba: &[u8]) -> Vec<u8> {
     hash
 }
 
-fn read_byte(bytes: &mut &[u8]) -> Result<u8, ()> {
-    let mut byte = [0; 1];
-    bytes.read_exact(&mut byte).map_err(|_| ())?;
-    Ok(byte[0])
-}
-
 /// Decodes a ThumbHash to an RGBA image.
 ///
 /// RGB is not be premultiplied by A. Returns the width, height, and pixels of
 /// the rendered placeholder image. An error will be returned if the input is
 /// too short.
-pub fn thumb_hash_to_rgba(mut hash: &[u8]) -> Result<(usize, usize, Vec<u8>), ()> {
-    let ratio = thumb_hash_to_approximate_aspect_ratio(hash)?;
+pub fn thumb_hash_to_rgba(hash: &[u8]) -> Result<(usize, usize, Vec<u8>), ()> {
+    use bitvec::prelude::*;
+    let mut hash = hash.view_bits::<Lsb0>();
 
-    // Read the constants
-    let header24 = read_byte(&mut hash)? as u32
-        | ((read_byte(&mut hash)? as u32) << 8)
-        | ((read_byte(&mut hash)? as u32) << 16);
-    let header16 = read_byte(&mut hash)? as u16 | ((read_byte(&mut hash)? as u16) << 8);
-    let l_dc = (header24 & 63) as f32 / 63.0;
-    let p_dc = ((header24 >> 6) & 63) as f32 / 31.5 - 1.0;
-    let q_dc = ((header24 >> 12) & 63) as f32 / 31.5 - 1.0;
-    let l_scale = ((header24 >> 18) & 31) as f32 / 31.0;
-    let has_alpha = (header24 >> 23) != 0;
-    let p_scale = ((header16 >> 3) & 63) as f32 / 63.0;
-    let q_scale = ((header16 >> 9) & 63) as f32 / 63.0;
-    let is_landscape = (header16 >> 15) != 0;
+    let l_dc = hash[..6].load_le::<u8>() as f32 / 63.0;
+    hash = &hash[6..];
+    let p_dc = hash[..6].load_le::<u8>() as f32 / 31.5 - 1.0;
+    hash = &hash[6..];
+    let q_dc = hash[..6].load_le::<u8>() as f32 / 31.5 - 1.0;
+    hash = &hash[6..];
+    let l_scale = hash[..5].load_le::<u8>() as f32 / 31.0;
+    hash = &hash[5..];
+    let has_alpha = hash[0];
+    hash = &hash[1..];
+
+    let l_count = hash[..3].load_le::<u8>() as usize;
+    hash = &hash[3..];
+
+    let p_scale = hash[..6].load_le::<u8>() as f32 / 63.0;
+    hash = &hash[6..];
+    let q_scale = hash[..6].load_le::<u8>() as f32 / 63.0;
+    hash = &hash[6..];
+
     let l_max = if has_alpha { 5 } else { 7 };
-    let lx = 3.max(if is_landscape { l_max } else { header16 & 7 }) as usize;
-    let ly = 3.max(if is_landscape { header16 & 7 } else { l_max }) as usize;
+    let is_landscape = hash[0];
+    hash = &hash[1..];
+
+    let lx = 3.max(if is_landscape { l_max } else { l_count });
+    let ly = 3.max(if is_landscape { l_count } else { l_max });
+    let ratio = lx as f32 / ly as f32;
+
     let (a_dc, a_scale) = if has_alpha {
-        let header8 = read_byte(&mut hash)?;
-        ((header8 & 15) as f32 / 15.0, (header8 >> 4) as f32 / 15.0)
+        // let header8 = read_byte(&mut hash)?;
+        // ((header8 & 15) as f32 / 15.0, (header8 >> 4) as f32 / 15.0)
+        let a_dc = hash[..4].load_le::<u8>() as f32 / 15.0;
+        hash = &hash[4..];
+        let a_scale = hash[..4].load_le::<u8>() as f32 / 15.0;
+        hash = &hash[4..];
+        (a_dc, a_scale)
     } else {
         (1.0, 1.0)
     };
 
     // Read the varying factors (boost saturation by 1.25x to compensate for quantization)
-    let mut prev_bits = None;
     let mut decode_channel = |nx: usize, ny: usize, scale: f32| -> Result<Vec<f32>, ()> {
         let mut ac = Vec::with_capacity(nx * ny);
         for cy in 0..ny {
             let mut cx = if cy > 0 { 0 } else { 1 };
             while cx * ny < nx * (ny - cy) {
-                let bits = if let Some(bits) = prev_bits {
-                    prev_bits = None;
-                    bits
-                } else {
-                    let bits = read_byte(&mut hash)?;
-                    prev_bits = Some(bits >> 4);
-                    bits & 15
-                };
-                ac.push((bits as f32 / 7.5 - 1.0) * scale);
+                ac.push((hash[..4].load_le::<u8>() as f32 / 7.5 - 1.0) * scale);
+                hash = &hash[4..];
+
                 cx += 1;
             }
         }
